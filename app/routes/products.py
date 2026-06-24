@@ -213,3 +213,16 @@ def update_product_category(product_id: int, category_data: CategoryUpdate, db: 
     producto.category_id = category_data.category_id
     db.commit()
     return {"message": "Categoría actualizada"}
+
+@router.delete("/api/products/{product_id}")
+def delete_product(product_id: int, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
+    producto = db.query(Product).filter(Product.id == product_id).first()
+    if not producto:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+        
+    # Opcional: Si tuviera variantes asignadas en la base de datos y no usas CASCADE, las borramos primero:
+    # db.query(ProductVariant).filter(ProductVariant.product_id == product_id).delete()
+
+    db.delete(producto)
+    db.commit()
+    return {"message": "Producto eliminado correctamente"}

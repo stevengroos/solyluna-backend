@@ -10,7 +10,7 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Catálogo API")
 
-# ... resto de tu código CORS y rutas ...
+# ... resto de tu código CORS y rutas ....
 
 app.add_middleware(
     CORSMiddleware,

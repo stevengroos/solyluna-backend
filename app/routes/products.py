@@ -1,5 +1,7 @@
 import httpx
 import time
+import uuid # <-- IMPORTAMOS UUID AQUI
+import os   # <-- IMPORTAMOS OS AQUI
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
@@ -45,8 +47,14 @@ async def create_product(
 ):
     try:
         file_bytes = await image.read()
-        safe_filename = image.filename.replace(" ", "_")
-        file_name = f"prod_{int(time.time())}_{safe_filename}" 
+        
+        # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
+        extension = os.path.splitext(image.filename)[1] # Saca el .png o .jpg original
+        if not extension:
+            extension = ".jpg" # Por si el archivo viene sin extensión
+            
+        file_name = f"prod_{uuid.uuid4().hex}{extension}" 
+        # ----------------------------------------
         
         supabase.storage.from_("productos-imagenes").upload(
             path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"}
@@ -130,8 +138,14 @@ async def edit_product(
 
         if image and image.filename:
             file_bytes = await image.read()
-            safe_filename = image.filename.replace(" ", "_")
-            file_name = f"prod_{int(time.time())}_{safe_filename}" 
+            
+            # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
+            extension = os.path.splitext(image.filename)[1]
+            if not extension:
+                extension = ".jpg"
+            file_name = f"prod_{uuid.uuid4().hex}{extension}" 
+            # ----------------------------------------
+            
             supabase.storage.from_("productos-imagenes").upload(path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"})
             producto.image_url = supabase.storage.from_("productos-imagenes").get_public_url(file_name)
 
@@ -160,8 +174,14 @@ async def add_variant(
         # Si le suben una foto específica para este color, la procesamos
         if image and image.filename:
             file_bytes = await image.read()
-            safe_filename = image.filename.replace(" ", "_")
-            file_name = f"var_{int(time.time())}_{safe_filename}"
+            
+            # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
+            extension = os.path.splitext(image.filename)[1]
+            if not extension:
+                extension = ".jpg"
+            file_name = f"var_{uuid.uuid4().hex}{extension}"
+            # ----------------------------------------
+            
             supabase.storage.from_("productos-imagenes").upload(
                 path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"}
             )
@@ -219,9 +239,6 @@ def delete_product(product_id: int, db: Session = Depends(get_db), admin_user: s
     producto = db.query(Product).filter(Product.id == product_id).first()
     if not producto:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
-        
-    # Opcional: Si tuviera variantes asignadas en la base de datos y no usas CASCADE, las borramos primero:
-    # db.query(ProductVariant).filter(ProductVariant.product_id == product_id).delete()
 
     db.delete(producto)
     db.commit()

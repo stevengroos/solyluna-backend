@@ -1,13 +1,13 @@
 import httpx
 import time
-import uuid # <-- IMPORTAMOS UUID AQUI
-import os   # <-- IMPORTAMOS OS AQUI
-from typing import Optional
+import uuid 
+import os   
+from typing import Optional, List # <-- Agregamos List aquí
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.database import get_db
-from app.models import Product, ProductVariant
+from app.models import Product, ProductVariant, ProductImage # <-- Importamos ProductImage
 from supabase import create_client, Client
 from app.auth import get_current_admin
 
@@ -47,14 +47,9 @@ async def create_product(
 ):
     try:
         file_bytes = await image.read()
-        
-        # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
-        extension = os.path.splitext(image.filename)[1] # Saca el .png o .jpg original
-        if not extension:
-            extension = ".jpg" # Por si el archivo viene sin extensión
-            
+        extension = os.path.splitext(image.filename)[1]
+        if not extension: extension = ".jpg"
         file_name = f"prod_{uuid.uuid4().hex}{extension}" 
-        # ----------------------------------------
         
         supabase.storage.from_("productos-imagenes").upload(
             path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"}
@@ -71,13 +66,11 @@ async def create_product(
         db.refresh(new_product)
         return new_product
     except Exception as e:
-        print(f"\n❌ ERROR DE SUPABASE: {str(e)}\n") 
         raise HTTPException(status_code=500, detail=f"Error al subir: {str(e)}")
 
 @router.get("/api/products")
 def get_products(db: Session = Depends(get_db)):
     products = db.query(Product).all()
-    # Mapeamos los datos para incluir las variantes automáticamente
     result = []
     for p in products:
         prod_data = {
@@ -89,10 +82,8 @@ def get_products(db: Session = Depends(get_db)):
             "image_url": p.image_url,
             "category_id": p.category_id,
             "has_physical_stock": p.has_physical_stock,
-            "variants": [
-                {"id": v.id, "color_name": v.color_name, "stock": v.stock, "image_url": v.image_url}
-                for v in p.variants
-            ]
+            "variants": [{"id": v.id, "color_name": v.color_name, "stock": v.stock, "image_url": v.image_url} for v in p.variants],
+            "gallery": [{"id": g.id, "image_url": g.image_url} for g in p.gallery] # <-- EXTRAEMOS LA GALERÍA
         }
         result.append(prod_data)
     return result
@@ -100,23 +91,14 @@ def get_products(db: Session = Depends(get_db)):
 @router.get("/api/products/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db)):
     p = db.query(Product).filter(Product.id == product_id).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    if not p: raise HTTPException(status_code=404, detail="Producto no encontrado")
     
-    # Formateamos el producto individual
     return {
-        "id": p.id,
-        "title": p.title,
-        "description": p.description,
-        "price": p.price,
-        "stock": p.stock,
-        "image_url": p.image_url,
-        "category_id": p.category_id,
+        "id": p.id, "title": p.title, "description": p.description, "price": p.price,
+        "stock": p.stock, "image_url": p.image_url, "category_id": p.category_id,
         "has_physical_stock": p.has_physical_stock,
-        "variants": [
-            {"id": v.id, "color_name": v.color_name, "stock": v.stock, "image_url": v.image_url}
-            for v in p.variants
-        ]
+        "variants": [{"id": v.id, "color_name": v.color_name, "stock": v.stock, "image_url": v.image_url} for v in p.variants],
+        "gallery": [{"id": g.id, "image_url": g.image_url} for g in p.gallery] # <-- EXTRAEMOS LA GALERÍA
     }
 
 @router.put("/api/products/{product_id}")
@@ -130,116 +112,109 @@ async def edit_product(
         producto = db.query(Product).filter(Product.id == product_id).first()
         if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
 
-        producto.title = title
-        producto.description = description
-        producto.price = price
-        producto.category_id = category_id
+        producto.title = title; producto.description = description
+        producto.price = price; producto.category_id = category_id
         producto.has_physical_stock = (has_physical_stock.lower() == 'true')
 
         if image and image.filename:
             file_bytes = await image.read()
-            
-            # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
             extension = os.path.splitext(image.filename)[1]
-            if not extension:
-                extension = ".jpg"
+            if not extension: extension = ".jpg"
             file_name = f"prod_{uuid.uuid4().hex}{extension}" 
-            # ----------------------------------------
             
             supabase.storage.from_("productos-imagenes").upload(path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"})
             producto.image_url = supabase.storage.from_("productos-imagenes").get_public_url(file_name)
 
-        db.commit()
-        db.refresh(producto)
+        db.commit(); db.refresh(producto)
         return {"message": "Producto editado con éxito"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al editar: {str(e)}")
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Error al editar: {str(e)}")
 
-# ================= RUTAS PARA VARIANTES (NUEVO) =================
 
-@router.post("/api/products/{product_id}/variants")
-async def add_variant(
-    product_id: int,
-    color_name: str = Form(...),
-    stock: int = Form(...),
-    image: Optional[UploadFile] = File(None),
-    db: Session = Depends(get_db),
-    admin_user: str = Depends(get_current_admin)
+# ================= RUTAS PARA GALERIA DE FOTOS (NUEVO) =================
+
+@router.post("/api/products/{product_id}/gallery")
+async def add_gallery_image(
+    product_id: int, image: UploadFile = File(...),
+    db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)
 ):
     try:
         producto = db.query(Product).filter(Product.id == product_id).first()
-        if not producto: raise HTTPException(status_code=404, detail="Producto padre no encontrado")
+        if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        file_bytes = await image.read()
+        extension = os.path.splitext(image.filename)[1]
+        if not extension: extension = ".jpg"
+        file_name = f"gal_{uuid.uuid4().hex}{extension}"
+        
+        supabase.storage.from_("productos-imagenes").upload(
+            path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"}
+        )
+        public_url = supabase.storage.from_("productos-imagenes").get_public_url(file_name)
+
+        new_image = ProductImage(product_id=product_id, image_url=public_url)
+        db.add(new_image)
+        db.commit()
+        db.refresh(new_image)
+        return new_image
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error subiendo imagen: {str(e)}")
+
+@router.delete("/api/products/gallery/{image_id}")
+def delete_gallery_image(image_id: int, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
+    imagen = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    if not imagen: raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    
+    db.delete(imagen)
+    db.commit()
+    return {"message": "Imagen de galería eliminada"}
+
+# ================= RUTAS PARA VARIANTES =================
+@router.post("/api/products/{product_id}/variants")
+async def add_variant(
+    product_id: int, color_name: str = Form(...), stock: int = Form(...), image: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)
+):
+    try:
+        producto = db.query(Product).filter(Product.id == product_id).first()
+        if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
 
         public_url = None
-        # Si le suben una foto específica para este color, la procesamos
         if image and image.filename:
             file_bytes = await image.read()
-            
-            # --- NUEVO SISTEMA DE NOMBRES SEGUROS ---
             extension = os.path.splitext(image.filename)[1]
-            if not extension:
-                extension = ".jpg"
+            if not extension: extension = ".jpg"
             file_name = f"var_{uuid.uuid4().hex}{extension}"
-            # ----------------------------------------
-            
-            supabase.storage.from_("productos-imagenes").upload(
-                path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"}
-            )
+            supabase.storage.from_("productos-imagenes").upload(path=file_name, file=file_bytes, file_options={"content-type": image.content_type, "upsert": "true"})
             public_url = supabase.storage.from_("productos-imagenes").get_public_url(file_name)
 
-        new_variant = ProductVariant(
-            product_id=product_id,
-            color_name=color_name,
-            stock=stock,
-            image_url=public_url
-        )
-        db.add(new_variant)
-        db.commit()
-        db.refresh(new_variant)
+        new_variant = ProductVariant(product_id=product_id, color_name=color_name, stock=stock, image_url=public_url)
+        db.add(new_variant); db.commit(); db.refresh(new_variant)
         return new_variant
-    except Exception as e:
-        print(f"\n❌ ERROR SUBIENDO VARIANTE: {str(e)}\n")
-        raise HTTPException(status_code=500, detail=f"Error al crear variante: {str(e)}")
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Error al crear variante: {str(e)}")
 
 @router.delete("/api/products/variants/{variant_id}")
 def delete_variant(variant_id: int, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
     variante = db.query(ProductVariant).filter(ProductVariant.id == variant_id).first()
     if not variante: raise HTTPException(status_code=404, detail="Variante no encontrada")
-    
-    db.delete(variante)
-    db.commit()
-    return {"message": "Variante eliminada correctamente"}
+    db.delete(variante); db.commit(); return {"message": "Variante eliminada correctamente"}
 
 # ================= OTROS ENDPOINTS =================
-
-class StockUpdate(BaseModel):
-    stock: int
-
+class StockUpdate(BaseModel): stock: int
 @router.put("/api/products/{product_id}/stock")
 def update_stock(product_id: int, stock_data: StockUpdate, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
     producto = db.query(Product).filter(Product.id == product_id).first()
     if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
-    producto.stock = stock_data.stock
-    db.commit()
-    return {"message": "Stock actualizado", "nuevo_stock": producto.stock}
+    producto.stock = stock_data.stock; db.commit(); return {"message": "Stock actualizado", "nuevo_stock": producto.stock}
 
-class CategoryUpdate(BaseModel):
-    category_id: Optional[int] = None
-
+class CategoryUpdate(BaseModel): category_id: Optional[int] = None
 @router.put("/api/products/{product_id}/category")
 def update_product_category(product_id: int, category_data: CategoryUpdate, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
     producto = db.query(Product).filter(Product.id == product_id).first()
     if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
-    producto.category_id = category_data.category_id
-    db.commit()
-    return {"message": "Categoría actualizada"}
+    producto.category_id = category_data.category_id; db.commit(); return {"message": "Categoría actualizada"}
 
 @router.delete("/api/products/{product_id}")
 def delete_product(product_id: int, db: Session = Depends(get_db), admin_user: str = Depends(get_current_admin)):
     producto = db.query(Product).filter(Product.id == product_id).first()
-    if not producto:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
-
-    db.delete(producto)
-    db.commit()
-    return {"message": "Producto eliminado correctamente"}
+    if not producto: raise HTTPException(status_code=404, detail="Producto no encontrado")
+    db.delete(producto); db.commit(); return {"message": "Producto eliminado"}

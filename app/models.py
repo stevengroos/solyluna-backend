@@ -3,7 +3,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from app.database import Base
 
-
 Base = declarative_base()
 
 class AdminUser(Base):
@@ -17,12 +16,22 @@ class ProductVariant(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"))
-    color_name = Column(String, index=True) # Ej: "Rojo", "Negro/Azul"
+    color_name = Column(String, index=True) 
     stock = Column(Integer, default=0)
-    image_url = Column(String, nullable=True) # Foto opcional para el color
+    image_url = Column(String, nullable=True) 
     
-    # Relación inversa
     product = relationship("Product", back_populates="variants")
+
+# --- NUEVA TABLA PARA LA GALERÍA DE FOTOS ---
+class ProductImage(Base):
+    __tablename__ = "product_images"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"))
+    image_url = Column(String, nullable=False)
+    
+    product = relationship("Product", back_populates="gallery")
+# --------------------------------------------
 
 class Product(Base):
     __tablename__ = "products"
@@ -30,16 +39,17 @@ class Product(Base):
     title = Column(String, index=True)
     description = Column(Text)
     price = Column(Float)
-    stock = Column(Integer) # Esto quedará para productos simples
-    image_url = Column(String) 
+    stock = Column(Integer) 
+    image_url = Column(String) # Foto principal de portada
     has_physical_stock = Column(Boolean, default=True) 
     
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     category = relationship("Category", back_populates="products")
     
-    # NUEVO: Un producto puede tener muchas variantes (colores)
-    # cascade="all, delete-orphan" hace que si borrás el producto, se borren sus colores automáticamente
     variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    
+    # NUEVA RELACIÓN: Conectamos el producto con su galería de fotos extras
+    gallery = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
 
 class Config(Base):
     __tablename__ = "config"
